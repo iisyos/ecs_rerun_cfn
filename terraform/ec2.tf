@@ -35,7 +35,7 @@ resource "aws_launch_template" "main" {
 
   network_interfaces {
     associate_public_ip_address = true
-    security_groups = [aws_security_group.ecs_sg.id]
+    security_groups             = [aws_security_group.ecs_sg.id]
   }
 }
 
@@ -50,10 +50,10 @@ resource "aws_autoscaling_group" "example" {
     version = aws_launch_template.main.latest_version
   }
 
-  min_size             = 1
-  max_size             = 1
-  desired_capacity     = 1
-  vpc_zone_identifier  = [aws_subnet.public_a.id]
+  min_size            = 1
+  max_size            = 1
+  desired_capacity    = 1
+  vpc_zone_identifier = [aws_subnet.public_a.id]
 }
 
 resource "aws_iam_policy" "ecs_agent" {

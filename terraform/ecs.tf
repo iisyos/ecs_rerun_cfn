@@ -5,6 +5,7 @@ resource "aws_ecs_cluster" "ecs_cluster" {
 
 resource "aws_ecs_task_definition" "task_definition" {
   family = "nginx"
+  network_mode = "bridge"
   container_definitions = jsonencode([
     {
       essential   = true
@@ -13,6 +14,12 @@ resource "aws_ecs_task_definition" "task_definition" {
       cpu         = 1
       image       = "nginx"
       environment = []
+      portMappings = [
+        {
+          containerPort = 80
+          hostPort      = 80
+        }
+      ]
     }
   ])
 }
