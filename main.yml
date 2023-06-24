@@ -1,0 +1,264 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS on EC2 task rerun if task failed before reaching a container instance.(with slack notifier)
+
+Parameters:
+  SlackUrl:
+    Type: String
+    Description: Slack webhook URL
+Resources:
+  ECSTaskRerunEventBridgeRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: ecs-task-rerun-event-rule
+      EventPattern:
+        source:
+          - aws.ecs
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - ecs.amazonaws.com
+          eventName:
+            - RunTask
+          responseElements:
+            failures:
+              reason:
+                - exists: true
+      State: ENABLED
+      Targets:
+        - Arn: !Ref ECSTaskRerunStateMachine
+          Id: ECSTaskRerunStateMachineTarget
+          RoleArn: !GetAtt ECSTaskRerunEventBridgeRole.Arn
+
+  ECSTaskRerunEventBridgeRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: ECSTaskRerunEventBridgePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:StartExecution'
+                Resource: !Ref ECSTaskRerunStateMachine
+
+  ECSTaskRerunStateMachine:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      StateMachineName: ECSTaskRerunStateMachine
+      DefinitionString:
+        Fn::Sub:
+          - |-
+            {
+              "Comment": "A state machine that starts an ECS task and retries if failure reason is AGENT.",
+              "StartAt": "Notify Failure",
+              "States": {
+                "Notify Failure": {
+                  "Type": "Task",
+                  "Resource": "arn:${AWS::Partition}:states:::sns:publish",
+                  "Parameters": {
+                    "Message.$": "States.Format('ECS task failed. Cluster: {}, Task Definition: {}, Reason: {}', $.detail.requestParameters.cluster, $.detail.requestParameters.taskDefinition, $.detail.responseElements.failures[0].reason)",
+                    "TopicArn": "${ECSTaskRerunSNSTopicArn}"
+                  },
+                  "ResultPath": "$.NotifyFailureResult",
+                  "Next": "Check Reason"
+                },
+                "Check Reason": {
+                  "Type": "Choice",
+                  "Choices": [
+                    {
+                      "Variable": "$.detail.responseElements.failures[0].reason",
+                      "StringEquals": "AGENT",
+                      "Next": "Start ECS Task"
+                    }
+                  ],
+                  "Default": "End"
+                },
+                "Start ECS Task": {
+                  "Type": "Task",
+                  "Resource": "arn:${AWS::Partition}:states:::ecs:runTask.sync",
+                  "Parameters": {
+                    "Cluster.$": "$.detail.requestParameters.cluster",
+                    "TaskDefinition.$": "$.detail.requestParameters.taskDefinition",
+                    "LaunchType.$": "$.detail.requestParameters.launchType"
+                  },
+                  "Retry": [
+                    {
+                      "ErrorEquals": [
+                        "States.ALL"
+                      ],
+                      "IntervalSeconds": 60,
+                      "MaxAttempts": 3,
+                      "BackoffRate": 1
+                    }
+                  ],
+                  "Catch": [
+                    {
+                      "ErrorEquals": [
+                        "States.ALL"
+                      ],
+                      "ResultPath": "$.errorInfo",
+                      "Next": "Notify Failure 3 attempts"
+                    }
+                  ],
+                  "End": true
+                },
+                "Notify Failure 3 attempts": {
+                  "Type": "Task",
+                  "Resource": "arn:${AWS::Partition}:states:::sns:publish",
+                  "Parameters": {
+                    "TopicArn": "${ECSTaskRerunSNSTopicArn}",
+                    "Message.$": "States.Format('ECS task failed after 3 attempts. Cluster: {}, Task Definition: {}, Error: {}', $.detail.requestParameters.cluster, $.detail.requestParameters.taskDefinition, $.errorInfo.Error)"
+                  },
+                  "End": true
+                },
+                "End": {
+                  "Type": "Pass",
+                  "End": true
+                }
+              }
+            }
+          - ECSTaskRerunSNSTopicArn: !Ref ECSTaskRerunSNSTopic
+      RoleArn: !GetAtt ECSTaskRerunStepFunctionsRole.Arn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt ECSTaskRerunStateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+  ECSTaskRerunStateMachineLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: /aws/step-functions/ECSTaskRerunStateMachineLogGroup
+      RetentionInDays: 14
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  ECSTaskRerunStepFunctionsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+      Policies:
+        - PolicyName: ECSTaskRerunStepFunctionsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'sns:Publish'
+                Resource: !Ref ECSTaskRerunSNSTopic
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                Resource: 
+                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForECSTaskRule
+              - Effect: Allow
+                Action:
+                  - "ecs:RunTask"
+                  - "ecs:StopTask"
+                  - "ecs:DescribeTasks"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogDelivery"
+                  - "logs:GetLogDelivery"
+                  - "logs:UpdateLogDelivery"
+                  - "logs:DeleteLogDelivery"
+                  - "logs:ListLogDeliveries"
+                  - "logs:PutResourcePolicy"
+                  - "logs:DescribeResourcePolicies"
+                  - "logs:DescribeLogGroups"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: "*"
+  ECSTaskRerunSNSTopic:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      DisplayName: ECSTaskRerunSNSTopic
+      Subscription:
+        - Endpoint: !GetAtt ECSTaskRerunSlackNotifierLambda.Arn
+          Protocol: lambda
+  ECSTaskRerunSlackNotifierLambda:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        ZipFile: |
+          const https = require('https');
+          const url = require('url');
+          exports.handler = async (event) => {
+              console.log(event);
+              console.log(event.Records[0].Sns.Message);
+              const postData = JSON.stringify({
+                  text: event.Records[0].Sns.Message,
+              });
+              const options = url.parse(process.env.SLACK_URL);
+              options.method = 'POST';
+              options.headers = {
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(postData),
+              };
+              return new Promise((resolve, reject) => {
+                  const req = https.request(options, (res) => {
+                      if (res.statusCode === 200) {
+                          resolve();
+                      } else {
+                          reject(new Error(`Received ${res.statusCode} from Slack`));
+                      }
+                  });
+                  req.on('error', (e) => {
+                      reject(e);
+                  });
+                  req.write(postData);
+                  req.end();
+              });
+          };
+      Description: ECS task rerun slack notifier
+      MemorySize: 128
+      Timeout: 20
+      Handler: index.handler
+      Runtime: nodejs18.x
+      Role: !GetAtt ECSTaskRerunLambdaExecutionRole.Arn
+      Environment:
+        Variables:
+          SLACK_URL: !Sub ${SlackUrl}
+
+  ECSTaskRerunLambdaExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+
+  LambdaInvokePermission:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt ECSTaskRerunSlackNotifierLambda.Arn
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref ECSTaskRerunSNSTopic
