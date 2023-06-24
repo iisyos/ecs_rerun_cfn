@@ -3,7 +3,7 @@ resource "aws_ecs_cluster" "ecs_cluster" {
   capacity_providers = [aws_ecs_capacity_provider.provider.name]
 }
 
-resource "aws_ecs_task_definition" "task_definition" {
+resource "aws_ecs_task_definition" "scheduled_task" {
   family = "one-shot-task"
 
   task_role_arn      = aws_iam_role.ecs_task_execution_role.arn
@@ -86,7 +86,7 @@ resource "aws_iam_role_policy_attachment" "ecs_task_execution_policy_attachment"
 resource "aws_ecs_service" "worker" {
   name            = var.app_name
   cluster         = aws_ecs_cluster.ecs_cluster.id
-  task_definition = aws_ecs_task_definition.task_definition.arn
+  task_definition = aws_ecs_task_definition.scheduled_task.arn
 }
 
 resource "aws_ecs_capacity_provider" "provider" {
