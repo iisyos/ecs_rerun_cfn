@@ -24,6 +24,9 @@ Resources:
             failures:
               reason:
                 - exists: true
+          requestParameters:
+            startedBy:
+              - anything-but: "AWS Step Functions"
       State: ENABLED
       Targets:
         - Arn: !Ref ECSTaskRerunStateMachine
@@ -206,8 +209,6 @@ Resources:
           const https = require('https');
           const url = require('url');
           exports.handler = async (event) => {
-              console.log(event);
-              console.log(event.Records[0].Sns.Message);
               const postData = JSON.stringify({
                   text: event.Records[0].Sns.Message,
               });
