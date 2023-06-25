@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS on EC2 task rerun if task failed before reaching a container instance.
+Resources:
+  ECSTaskRerunEventBridgeRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Name: ecs-task-rerun-event-rule
+      EventPattern:
+        source:
+          - aws.ecs
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - ecs.amazonaws.com
+          eventName:
+            - RunTask
+          responseElements:
+            failures:
+              reason:
+                - exists: true
+          requestParameters:
+            startedBy:
+              - anything-but: "AWS Step Functions"
+      State: ENABLED
+      Targets:
+        - Arn: !Ref ECSTaskRerunStateMachine
+          Id: ECSTaskRerunStateMachineTarget
+          RoleArn: !GetAtt ECSTaskRerunEventBridgeRole.Arn
+  ECSTaskRerunEventBridgeRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: ECSTaskRerunEventBridgePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:StartExecution'
+                Resource: !Ref ECSTaskRerunStateMachine
+  ECSTaskRerunStateMachine:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      StateMachineName: ECSTaskRerunStateMachine
+      DefinitionString:
+        Fn::Sub: |
+          {
+            "Comment": "A state machine that starts an ECS task and retries if failure reason is AGENT.",
+            "StartAt": "Check Reason",
+            "States": {
+              "Check Reason": {
+                "Type": "Choice",
+                "Choices": [
+                  {
+                    "Variable": "$.detail.responseElements.failures[0].reason",
+                    "StringEquals": "AGENT",
+                    "Next": "Start ECS Task"
+                  }
+                ],
+                "Default": "End"
+              },
+              "Start ECS Task": {
+                "Type": "Task",
+                "Resource": "arn:${AWS::Partition}:states:::ecs:runTask.sync",
+                "Parameters": {
+                  "Cluster.$": "$.detail.requestParameters.cluster",
+                  "TaskDefinition.$": "$.detail.requestParameters.taskDefinition",
+                  "LaunchType.$": "$.detail.requestParameters.launchType"
+                },
+                "Retry": [
+                  {
+                    "ErrorEquals": [
+                      "States.ALL"
+                    ],
+                    "IntervalSeconds": 60,
+                    "MaxAttempts": 3,
+                    "BackoffRate": 1
+                  }
+                ],
+                "End": true
+              },
+              "End": {
+                "Type": "Pass",
+                "End": true
+              }
+            }
+          }
+      RoleArn: !GetAtt ECSTaskRerunStepFunctionsRole.Arn
+      LoggingConfiguration:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt ECSTaskRerunStateMachineLogGroup.Arn
+        IncludeExecutionData: true
+        Level: ALL
+  ECSTaskRerunStateMachineLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: /aws/step-functions/ECSTaskRerunStateMachineLogGroup
+      RetentionInDays: 14
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  ECSTaskRerunStepFunctionsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+      Policies:
+        - PolicyName: ECSTaskRerunStepFunctionsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                Resource: 
+                  - !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForECSTaskRule
+              - Effect: Allow
+                Action:
+                  - "ecs:RunTask"
+                  - "ecs:StopTask"
+                  - "ecs:DescribeTasks"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - "logs:CreateLogDelivery"
+                  - "logs:GetLogDelivery"
+                  - "logs:UpdateLogDelivery"
+                  - "logs:DeleteLogDelivery"
+                  - "logs:ListLogDeliveries"
+                  - "logs:PutResourcePolicy"
+                  - "logs:DescribeResourcePolicies"
+                  - "logs:DescribeLogGroups"
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - 'iam:PassRole'
+                Resource: "*"
