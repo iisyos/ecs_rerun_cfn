@@ -1,6 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: ECS on EC2 task rerun if task failed before reaching a container instance.(with slack notifier)
-
 Parameters:
   SlackUrl:
     Type: String
@@ -32,7 +31,6 @@ Resources:
         - Arn: !Ref ECSTaskRerunStateMachine
           Id: ECSTaskRerunStateMachineTarget
           RoleArn: !GetAtt ECSTaskRerunEventBridgeRole.Arn
-
   ECSTaskRerunEventBridgeRole:
     Type: 'AWS::IAM::Role'
     Properties:
@@ -52,7 +50,6 @@ Resources:
                 Action:
                   - 'states:StartExecution'
                 Resource: !Ref ECSTaskRerunStateMachine
-
   ECSTaskRerunStateMachine:
     Type: 'AWS::StepFunctions::StateMachine'
     Properties:
@@ -263,3 +260,4 @@ Resources:
       FunctionName: !GetAtt ECSTaskRerunSlackNotifierLambda.Arn
       Principal: sns.amazonaws.com
       SourceArn: !Ref ECSTaskRerunSNSTopic
+      
