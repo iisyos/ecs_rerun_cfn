@@ -26,6 +26,7 @@ If you don't require Slack notifications, you can use this  alternative [quick-c
 ## Debugging
 
 If you wish to reproduce this scenario for testing purposes, you can use the `terraform` directory and apply it to create the environment shown in the left thumbnail.
+
 <img src="left-architect.png">
 
 Then, modify the outbound rules of the subnet where the EC2 instance exists to block traffic to the ECS API endpoint. For more information, refer to [How to manually trigger an AGENT error when running ECS RunTask](https://dev.classmethod.jp/articles/how-to-manually-raise-an-agent-error-when-execute-ecs-run-task/).
