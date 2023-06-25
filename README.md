@@ -20,10 +20,8 @@ When an ECS API failure occurs, EventBridge catches the error and triggers the S
 
 ## How to use
 
-To create the stack, use the [quick-create links](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review
-?templateURL=https://s3.ap-northeast-1.amazonaws.com/cd-template-okamos/ecs_rerun_cfn/main.yml).
-If you don't require Slack notifications, you can use this  alternative [quick-create links](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review
-?templateURL=https://s3.ap-northeast-1.amazonaws.com/cd-template-okamos/ecs_rerun_cfn/no-slack.yml) to create the stack.
+To create the stack, use the [quick-create links](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review?templateURL=https://s3.ap-northeast-1.amazonaws.com/cd-template-okamos/ecs_rerun_cfn/main.yml).
+If you don't require Slack notifications, you can use this  alternative [quick-create links](https://console.aws.amazon.com/cloudformation/home?region=ap-northeast-1#/stacks/create/review?templateURL=https://s3.ap-northeast-1.amazonaws.com/cd-template-okamos/ecs_rerun_cfn/no-slack.yml) to create the stack.
 
 ## Debugging
 
